@@ -23,6 +23,7 @@
 """
 #from qgis.core import QgsProject,  QgsVectorLayer,  QgsFeature,  QgsField,  QgsGeometry,  QgsPointXY
 from qgis.core import *
+from math import cos, sin, asin, sqrt, radians
 from PyQt5.QtCore import QVariant
 from PyQt5.QtCore import QSettings, QTranslator, qVersion, QCoreApplication, Qt
 from PyQt5.QtGui import QIcon
@@ -89,6 +90,22 @@ class MFAM_Loader:
         else:
             seconds = float(time_stamp[0:2]) * 3600 + float(time_stamp[2:4]) * 60 + float(time_stamp[4:]) 
         return(seconds)
+
+    def CalcDistance(self, lat1, lon1, lat2, lon2):
+        """
+        Calculate the great circle distance between two points
+        on the earth (specified in decimal degrees)
+        https://gis.stackexchange.com/questions/61924/python-gdal-degrees-to-meters-without-reprojecting
+        """
+        # convert decimal degrees to radians
+        lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+        # haversine formula
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+        c = 2 * asin(sqrt(a))
+        km = 6371 * c
+        return km
 
     def add_to_file_list(self):
         filenames = QFileDialog.getOpenFileNames(self.dockwidget, 'Open MFAM Data File', '', 'MFAM Files (*.dat *.txt *.asc)')
@@ -234,7 +251,8 @@ class MFAM_Loader:
                 QgsField("Longitude",  QVariant.Double),
                 QgsField("W",  QVariant.String),
                 QgsField("Altitude",  QVariant.Double),
-                QgsField("Cum Distance",  QVariant.Double),
+                QgsField("Velocity",  QVariant.Double),
+                QgsField("Heading",  QVariant.Double),
                 QgsField("Mag1D",  QVariant.Double),
                 QgsField("Mag2D",  QVariant.Double),
                 QgsField("Fiducial",  QVariant.Int), 
@@ -283,7 +301,7 @@ class MFAM_Loader:
                     GPRMC.append(info)                        #Array is 13 elements long, with file line number in the first position
 
             infile = open(self.dockwidget.listWidget.item(item).text(),"r")     # This routine trims off values that don't have corresponding GPS values.
-            if int(self.TotalSeconds(GPRMC[0][1])  > start_time):                 # If this is True, this means there is no corresponding GPS info for the first lines of the file, so discard          
+            if int(self.TotalSeconds(GPRMC[0][1])  < start_time):                 # If this is True, this means there is no corresponding GPS info for the first lines of the file, so discard          
                 GPRMC = GPRMC[1:]                             # remove that first useless GPRMC
                 data_line = infile.readline()
                 while (self.TotalSeconds(data_line.split(",")[19]) < self.TotalSeconds(GPRMC[0][1]) ):
@@ -300,7 +318,6 @@ class MFAM_Loader:
 
             for cycle in range(1,len(GPRMC)-1):                # Start hunting for 1000 rollover point
                 while (self.TotalSeconds(data_old.split(",")[19]) < (self.TotalSeconds(GPRMC[cycle][1]) ) ):         # i.e. as long as sequence is ascending, continue..
-                    print ('While %.3f is smaller than %.3f \n' % (self.TotalSeconds(data_old.split(",")[19]), (self.TotalSeconds(GPRMC[cycle][1]) - 2 * delta_sec )))
                     if self.dockwidget.outputCheckBox.isChecked():       # Write output file, if box is checked
                         info = data_line.strip("\n").split(",")
                         T_orig = self.TotalSeconds(GPRMC[cycle-1][1])     # Interpolate time interval
@@ -342,10 +359,12 @@ class MFAM_Loader:
                     data_line = infile.readline()
                     data_old = data_line
 
+                lat_old = lat
+                long_old = long
                 T_orig = self.TotalSeconds(GPRMC[cycle][1])     # Interpolate time interval
                 T_current = self.TotalSeconds(data_line.strip("\n").split(",")[19])
                 T_next = self.TotalSeconds(GPRMC[cycle+1][1])
-                weighting = ( T_current - T_orig ) / ( T_next - T_orig )
+                weighting = ( T_current - T_orig ) / (( T_next - T_orig ) * 1000)
                 data_entry = GPRMC[cycle]
 
                 for a in data_elements:                      # Pick out the desired items from the data line, weighted according to the interpolation of time data
@@ -358,7 +377,8 @@ class MFAM_Loader:
                     long = -(float(self.DecDegrees(data_entry[5])))
                 else:
                     long = float(self.DecDegrees(data_entry[5]))
-                #self.dockwidget.listWidget.addItem('LatLong: ' + '%3.6f' %lat + ', ' + '%3.6f' %long)
+                print('lat: %.3f,  long: %.3f,  lat_old: %.3f,  long_old: %.3f' %(lat, long, lat_old, long_old))
+                velocity = self.CalcDistance(lat_old, long_old, lat, long)/( T_next - T_orig )
 
                 try:
                     feat = QgsFeature()                      # Vector layer feature added
@@ -369,8 +389,9 @@ class MFAM_Loader:
                         str(data_entry[4]),      # "N"
                         long,                    # Longitude
                         str(data_entry[6]),      # "W"
-                        float(data_entry[7]),    # Altitude
-                        float(data_entry[8]),    # Cum Distance
+                        float(data_entry[7]),    # Velocity1
+                        velocity,                       # Velocity2
+                        float(data_entry[8]),    # Heading
                         float(data_entry[13]),   # Mag 1D
                         float(data_entry[14]),   # Mag 2D
                         int(data_entry[15]),     # Fiducial
@@ -401,7 +422,6 @@ class MFAM_Loader:
         if self.dockwidget.outputCheckBox.isChecked():
             outfile.close()
         vl.commitChanges()
-
 
     def add_action(
         self,
@@ -437,7 +457,6 @@ class MFAM_Loader:
         self.actions.append(action)
 
         return action
-
 
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
