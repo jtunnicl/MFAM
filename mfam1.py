@@ -292,7 +292,6 @@ class MFAM_Loader:
             infile = open(self.dockwidget.listWidget.item(item).text(),"r") 
             GPRMC = []
             data_line = infile.readline()
-            start_time = self.TotalSeconds(data_line.strip("\n").split(",")[19])
             for line in range(0,(line_count-1)):
                 data_line = infile.readline()
                 if data_line.strip("\n").split(",")[21] == "$GPRMC":
@@ -300,12 +299,17 @@ class MFAM_Loader:
                     info.insert(0,data_line.strip("\n").split(",")[2])
                     GPRMC.append(info)                        #Array is 13 elements long, with file line number in the first position
 
-            infile = open(self.dockwidget.listWidget.item(item).text(),"r")     # This routine trims off values that don't have corresponding GPS values.
-            if int(self.TotalSeconds(GPRMC[0][1])  < start_time):                 # If this is True, this means there is no corresponding GPS info for the first lines of the file, so discard          
+            infile = open(self.dockwidget.listWidget.item(item).text(),"r") 
+            data_line = infile.readline()
+            fid_old = int(data_line.split(",")[2])
+            fid_new = fid_old + 1
+            while (fid_new > fid_old):
+                data_line = infile.readline()             # scroll to the first valid start of the next '0' in the ms cycle
+                fid_new = int(data_line.split(",")[2])
+                fid_old = fid_new
+
+            if int(self.TotalSeconds(GPRMC[0][1])  < self.TotalSeconds(data_line.split(",")[19])):   # If this is True, this means there is no corresponding GPS info for the first lines of the file, so discard          
                 GPRMC = GPRMC[1:]                             # remove that first useless GPRMC
-                data_line = infile.readline()
-                while (self.TotalSeconds(data_line.split(",")[19]) < self.TotalSeconds(GPRMC[0][1]) ):
-                    data_line = infile.readline()             # scroll to the first valid start of the next '0' in the ms cycle
 
             data_elements = ([0,1,2,6,7,8,9,10,11,12,13,14,15,16,17])              # Indices, on each line, of the desired dataset
             data_array = []
@@ -536,3 +540,4 @@ class MFAM_Loader:
             self.dockwidget.outputCheckBox.stateChanged.connect(self.selectOutputFile)
             self.dockwidget.clear_List.clicked.connect(self.clearList)
             self.dockwidget.process_files.clicked.connect(self.branch)
+
